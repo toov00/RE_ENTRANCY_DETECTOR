@@ -1,6 +1,6 @@
-# Reentrancy Detector
+# RE-ENTRANCY DETECTOR
 
-A static analysis tool that scans Solidity smart contracts for reentrancy vulnerabilities.
+A static analysis tool that scans Solidity smart contracts for re-entrancy vulnerabilities.
 
 ## Getting Started
 
