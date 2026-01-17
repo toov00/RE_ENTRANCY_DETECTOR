@@ -152,7 +152,7 @@ contract DelegateCallVulnerable {
         (bool success, ) = implementation.delegatecall(data);
         require(success, "Delegatecall failed");
     }
-
+    
     function updateImplementation(address newImpl) external {
         implementation = newImpl;
     }

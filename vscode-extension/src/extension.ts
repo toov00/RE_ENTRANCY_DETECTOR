@@ -282,8 +282,12 @@ class ReentrancyDiagnosticProvider {
             const result = await this.runAnalyzer(filePath, sourceCode);
 
             if (!result) {
+                this.outputChannel.appendLine('Analyzer returned no result');
+                this.diagnosticCollection.set(document.uri, []);
                 return;
             }
+
+            this.outputChannel.appendLine(`Analyzer returned result with ${result.vulnerabilities?.length || 0} vulnerabilities`);
 
             // Show parse errors
             if (result.parse_errors && result.parse_errors.length > 0) {
@@ -298,14 +302,34 @@ class ReentrancyDiagnosticProvider {
 
             const maxLine = document.lineCount - 1;
 
-            for (const vuln of result.vulnerabilities) {
+            const vulnerabilities = result.vulnerabilities || [];
+            this.outputChannel.appendLine(`Processing ${vulnerabilities.length} vulnerabilities...`);
+
+            for (const vuln of vulnerabilities) {
                 // Validate and clamp line numbers
-                let line = Math.max(0, Math.min(vuln.location.line - 1, maxLine)); // Convert to 0-based and validate
+                // Line numbers from analyzer are 1-based, convert to 0-based for VSCode
+                let line = vuln.location.line - 1;
+                
+                // Clamp to valid range
+                if (line < 0) {
+                    line = 0;
+                } else if (line > maxLine) {
+                    line = maxLine;
+                }
+                
                 const column = Math.max(0, vuln.location.column - 1);
                 
                 // Get actual line length for proper range
-                const lineText = document.lineAt(line).text;
-                const endColumn = Math.min(column + 50, lineText.length); // Limit range width
+                let lineText = '';
+                try {
+                    lineText = document.lineAt(line).text;
+                } catch (e) {
+                    this.outputChannel.appendLine(`Warning: Could not get line ${line + 1}, using line 0`);
+                    line = 0;
+                    lineText = document.lineAt(0).text;
+                }
+                
+                const endColumn = Math.min(Math.max(column + 50, column + 1), lineText.length); // Ensure valid range
 
                 const range = new vscode.Range(
                     line,
@@ -320,23 +344,32 @@ class ReentrancyDiagnosticProvider {
                 const diagnostic = new vscode.Diagnostic(range, message, severity);
                 diagnostic.source = 'reentrancy-detector';
                 diagnostic.code = vuln.type;
-                // Remove incorrect tags - vulnerabilities are not "unnecessary"
-                // Could add custom tags if needed, but for now leave empty
 
                 diagnostics.push(diagnostic);
+                this.outputChannel.appendLine(`Added diagnostic: ${vuln.severity} - ${vuln.title} at line ${line + 1}`);
             }
 
             this.diagnosticCollection.set(document.uri, diagnostics);
 
             // Show summary in output channel
-            if (result.summary.total > 0) {
+            const totalVulns = vulnerabilities.length;
+            const summary = result.summary || { critical: 0, high: 0, medium: 0, low: 0, total: totalVulns };
+            
+            if (totalVulns > 0) {
                 this.outputChannel.appendLine(
-                    `Found ${result.summary.total} vulnerabilities: ` +
-                    `${result.summary.critical} Critical, ` +
-                    `${result.summary.high} High, ` +
-                    `${result.summary.medium} Medium, ` +
-                    `${result.summary.low} Low`
+                    `Found ${totalVulns} vulnerabilities: ` +
+                    `${summary.critical} Critical, ` +
+                    `${summary.high} High, ` +
+                    `${summary.medium} Medium, ` +
+                    `${summary.low} Low`
                 );
+                if (diagnostics.length > 0) {
+                    vscode.window.showInformationMessage(
+                        `Found ${totalVulns} re-entrancy issue${totalVulns > 1 ? 's' : ''}. Check Problems panel for details.`
+                    );
+                } else {
+                    this.outputChannel.appendLine(`Warning: ${totalVulns} vulnerabilities found but ${diagnostics.length} diagnostics created. This may indicate a line number issue.`);
+                }
             } else {
                 this.outputChannel.appendLine('No vulnerabilities found.');
             }
