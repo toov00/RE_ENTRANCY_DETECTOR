@@ -126,10 +126,16 @@ class SolidityParser:
         return contracts
 
     def _remove_comments_and_strings(self, code: str) -> str:
-        """Remove comments and string literals from code."""
-        # Remove multi-line comments first
-        code = self.PATTERNS['multi_comment'].sub(' ', code)
-        # Remove single-line comments
+        """Remove comments and string literals from code, preserving line structure."""
+        # Remove multi-line comments first, replacing with spaces to preserve line structure
+        def replace_multiline(match):
+            # Replace with spaces equal to the number of newlines in the comment
+            content = match.group(0)
+            newline_count = content.count('\n')
+            return ' ' * (len(content) - newline_count) + '\n' * newline_count
+        
+        code = self.PATTERNS['multi_comment'].sub(replace_multiline, code)
+        # Remove single-line comments (preserve the newline if comment is at end of line)
         code = self.PATTERNS['single_comment'].sub('', code)
         # Replace string literals with placeholders to preserve positions
         code = self.PATTERNS['string_literal'].sub('""', code)
@@ -140,6 +146,12 @@ class SolidityParser:
         if code is None:
             code = self.source_code
         return code[:pos].count('\n') + 1
+    
+    def _get_line_number_from_cleaned(self, pos: int) -> int:
+        """Get line number for a position in cleaned_code, mapping back to source_code."""
+        # Since newlines are preserved when removing comments, we can count newlines
+        # in cleaned_code up to the position, which gives us the correct line number
+        return self.cleaned_code[:pos].count('\n') + 1
 
     def _find_matching_brace(self, code: str, start: int) -> int:
         """Find the position of the matching closing brace."""
@@ -250,10 +262,10 @@ class SolidityParser:
         # Check for payable
         is_payable = 'payable' in modifiers_str
 
-        # Get absolute line numbers
-        func_start_line = self._get_line_number(offset + match.start())
-        body_start_line = self._get_line_number(offset + body_start)
-        body_end_line = self._get_line_number(offset + body_end)
+        # Get absolute line numbers (using cleaned_code positions)
+        func_start_line = self._get_line_number_from_cleaned(offset + match.start())
+        body_start_line = self._get_line_number_from_cleaned(offset + body_start)
+        body_end_line = self._get_line_number_from_cleaned(offset + body_end)
 
         func = Function(
             name=name,
@@ -301,7 +313,8 @@ class SolidityParser:
 
         # Low-level calls (call, delegatecall, staticcall)
         for match in self.PATTERNS['low_level_call'].finditer(function_body):
-            line = self._get_line_number(offset + match.start())
+            # Calculate line number from cleaned_code position
+            line = self._get_line_number_from_cleaned(offset + match.start())
             call = ExternalCall(
                 location=SourceLocation(line=line),
                 call_type=match.group(2),
@@ -314,7 +327,8 @@ class SolidityParser:
 
         # Transfer and send
         for match in self.PATTERNS['transfer_send'].finditer(function_body):
-            line = self._get_line_number(offset + match.start())
+            # Calculate line number from cleaned_code position
+            line = self._get_line_number_from_cleaned(offset + match.start())
             call = ExternalCall(
                 location=SourceLocation(line=line),
                 call_type=match.group(2),
@@ -354,7 +368,7 @@ class SolidityParser:
         """Get the location of the loop containing a position."""
         for loop_start, loop_end in loops:
             if loop_start <= pos <= loop_end:
-                return SourceLocation(line=self._get_line_number(offset + loop_start))
+                return SourceLocation(line=self._get_line_number_from_cleaned(offset + loop_start))
         return None
 
     def _parse_state_changes(self, function_body: str, offset: int, state_vars: List[str]) -> List[StateChange]:
@@ -365,7 +379,7 @@ class SolidityParser:
         for match in self.PATTERNS['state_assignment'].finditer(function_body):
             var_name = match.group(1).split('[')[0]  # Get base variable name
             if var_name in state_vars:
-                line = self._get_line_number(offset + match.start())
+                line = self._get_line_number_from_cleaned(offset + match.start())
                 changes.append(StateChange(
                     location=SourceLocation(line=line),
                     variable=var_name,
@@ -377,7 +391,7 @@ class SolidityParser:
         for match in self.PATTERNS['delete'].finditer(function_body):
             var_name = match.group(1).split('[')[0]
             if var_name in state_vars:
-                line = self._get_line_number(offset + match.start())
+                line = self._get_line_number_from_cleaned(offset + match.start())
                 changes.append(StateChange(
                     location=SourceLocation(line=line),
                     variable=var_name,
@@ -389,7 +403,7 @@ class SolidityParser:
         for match in self.PATTERNS['inc_dec'].finditer(function_body):
             var_name = match.group(1).split('[')[0]
             if var_name in state_vars:
-                line = self._get_line_number(offset + match.start())
+                line = self._get_line_number_from_cleaned(offset + match.start())
                 changes.append(StateChange(
                     location=SourceLocation(line=line),
                     variable=var_name,

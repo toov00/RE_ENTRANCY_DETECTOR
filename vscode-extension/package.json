@@ -1,5 +1,5 @@
 {
-  "name": "reentrancy-detector",
+  "name": "sollinter",
   "displayName": "Solidity Re-entrancy Checker",
   "description": "Checks Solidity code for re-entrancy patterns and shows results in the Problems panel.",
   "version": "1.0.0",
@@ -25,8 +25,7 @@
   ],
   "keywords": [
     "solidity",
-    "linter",
-    "code-checker"
+    "linter"
   ],
   "main": "./out/extension.js",
   "contributes": {
