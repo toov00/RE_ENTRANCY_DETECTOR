@@ -3,6 +3,16 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 
+// Constants
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const PROCESS_TIMEOUT = 60000; // 60 seconds
+const DEBOUNCE_DELAY = 500; // 500ms
+const MAX_OUTPUT_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_DIAGNOSTIC_RANGE = 50; // Maximum characters to highlight
+const DEFAULT_PYTHON_PATH = 'python3';
+const EXTENSION_NAME = 'reentrancy-detector';
+const ANALYZER_SCRIPT_NAME = 'analyzer_server.py';
+
 interface Vulnerability {
     type: string;
     severity: string;
@@ -36,12 +46,9 @@ class ReentrancyDiagnosticProvider {
     private outputChannel: vscode.OutputChannel;
     private activeProcesses: Map<string, ChildProcess> = new Map();
     private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
-    private readonly MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-    private readonly PROCESS_TIMEOUT = 60000; // 60 seconds
-    private readonly DEBOUNCE_DELAY = 500; // 500ms
 
     constructor() {
-        this.diagnosticCollection = vscode.languages.createDiagnosticCollection('reentrancy-detector');
+        this.diagnosticCollection = vscode.languages.createDiagnosticCollection(EXTENSION_NAME);
         this.outputChannel = vscode.window.createOutputChannel('Re-entrancy Detector');
     }
 
@@ -50,21 +57,42 @@ class ReentrancyDiagnosticProvider {
     }
 
     private validatePath(filePath: string): boolean {
-        // Basic path validation - prevent path traversal
+        /**
+         * Validate file path to prevent path traversal attacks.
+         * 
+         * @param filePath - Path to validate
+         * @returns True if path is valid, false otherwise
+         */
+        if (!filePath || typeof filePath !== 'string') {
+            return false;
+        }
         const normalized = path.normalize(filePath);
-        return !normalized.includes('..') && path.isAbsolute(normalized) || !normalized.startsWith('..');
+        // Prevent path traversal and ensure path is absolute
+        return !normalized.includes('..') && (path.isAbsolute(normalized) || !normalized.startsWith('..'));
     }
 
     private sanitizePythonPath(pythonPath: string): string {
-        // Remove any shell metacharacters and validate
+        /**
+         * Sanitize Python path to prevent command injection.
+         * 
+         * @param pythonPath - Raw Python path from configuration
+         * @returns Sanitized Python path or default
+         */
+        if (!pythonPath || typeof pythonPath !== 'string') {
+            return DEFAULT_PYTHON_PATH;
+        }
+        
+        // Remove shell metacharacters
         const sanitized = pythonPath.trim().replace(/[;&|`$(){}[\]<>]/g, '');
         if (!sanitized || sanitized.length === 0) {
-            return 'python3';
+            return DEFAULT_PYTHON_PATH;
         }
+        
         // Only allow alphanumeric, dots, slashes, dashes, underscores, and spaces
         if (!/^[a-zA-Z0-9./_\- ]+$/.test(sanitized)) {
-            return 'python3';
+            return DEFAULT_PYTHON_PATH;
         }
+        
         return sanitized;
     }
 
@@ -94,8 +122,10 @@ class ReentrancyDiagnosticProvider {
             const severityThreshold = config.get<string>('severityThreshold', 'low');
 
             // Validate file size
-            if (sourceCode.length > this.MAX_FILE_SIZE) {
-                reject(new Error(`File too large (${Math.round(sourceCode.length / 1024 / 1024)}MB). Maximum size is ${this.MAX_FILE_SIZE / 1024 / 1024}MB.`));
+            if (sourceCode.length > MAX_FILE_SIZE) {
+                const fileSizeMB = Math.round(sourceCode.length / 1024 / 1024);
+                const maxSizeMB = MAX_FILE_SIZE / 1024 / 1024;
+                reject(new Error(`File too large (${fileSizeMB}MB). Maximum size is ${maxSizeMB}MB.`));
                 return;
             }
 
@@ -127,7 +157,7 @@ class ReentrancyDiagnosticProvider {
                 // Try workspace root first (for development)
                 const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
                 if (workspaceRoot) {
-                    const workspacePath = path.join(workspaceRoot, 'vscode-extension', 'analyzer_server.py');
+                    const workspacePath = path.join(workspaceRoot, 'vscode-extension', ANALYZER_SCRIPT_NAME);
                     if (fs.existsSync(workspacePath)) {
                         scriptPath = workspacePath;
                     } else {
@@ -138,11 +168,11 @@ class ReentrancyDiagnosticProvider {
                     // Try to find extension by name pattern
                     const allExtensions = vscode.extensions.all;
                     const extension = allExtensions.find(ext => 
-                        ext.packageJSON.name === 'reentrancy-detector'
+                        ext.packageJSON.name === EXTENSION_NAME
                     );
                     const extensionPath = extension?.extensionPath;
                     if (extensionPath) {
-                        scriptPath = path.join(extensionPath, 'analyzer_server.py');
+                        scriptPath = path.join(extensionPath, ANALYZER_SCRIPT_NAME);
                         if (!fs.existsSync(scriptPath)) {
                             reject(new Error(`Analyzer script not found at ${scriptPath}`));
                             return;
@@ -167,17 +197,16 @@ class ReentrancyDiagnosticProvider {
                 if (process && !process.killed) {
                     process.kill();
                     this.activeProcesses.delete(filePath);
-                    reject(new Error(`Analyzer process timed out after ${this.PROCESS_TIMEOUT / 1000} seconds`));
+                    reject(new Error(`Analyzer process timed out after ${PROCESS_TIMEOUT / 1000} seconds`));
                 }
-            }, this.PROCESS_TIMEOUT);
+            }, PROCESS_TIMEOUT);
 
             this.activeProcesses.set(filePath, process);
 
             let stdout = '';
             let stderr = '';
-            const MAX_OUTPUT_SIZE = 50 * 1024 * 1024; // 50MB max output
 
-            process.stdout.on('data', (data) => {
+            process.stdout.on('data', (data: Buffer) => {
                 stdout += data.toString();
                 if (stdout.length > MAX_OUTPUT_SIZE) {
                     process.kill();
@@ -187,7 +216,7 @@ class ReentrancyDiagnosticProvider {
                 }
             });
 
-            process.stderr.on('data', (data) => {
+            process.stderr.on('data', (data: Buffer) => {
                 stderr += data.toString();
                 if (stderr.length > MAX_OUTPUT_SIZE) {
                     process.kill();
@@ -267,7 +296,7 @@ class ReentrancyDiagnosticProvider {
             const timer = setTimeout(() => {
                 this.debounceTimers.delete(uri);
                 this.analyzeDocument(document, true);
-            }, this.DEBOUNCE_DELAY);
+            }, DEBOUNCE_DELAY);
 
             this.debounceTimers.set(uri, timer);
             return;
@@ -329,7 +358,10 @@ class ReentrancyDiagnosticProvider {
                     lineText = document.lineAt(0).text;
                 }
                 
-                const endColumn = Math.min(Math.max(column + 50, column + 1), lineText.length); // Ensure valid range
+                const endColumn = Math.min(
+                    Math.max(column + MAX_DIAGNOSTIC_RANGE, column + 1),
+                    lineText.length
+                );
 
                 const range = new vscode.Range(
                     line,

@@ -6,7 +6,7 @@ Orchestrates parsing and pattern detection.
 import os
 import time
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict, Any
 
 from .models import (
     Contract, Vulnerability, AnalysisResult, ScanResult,
@@ -14,6 +14,11 @@ from .models import (
 )
 from .parser import SolidityParser
 from .patterns import ReentrancyPatterns
+
+# Constants
+DEFAULT_MAX_FILE_SIZE = 1024 * 1024  # 1MB
+DEFAULT_SEVERITY_THRESHOLD = Severity.LOW
+DEFAULT_EXCLUDE_PATTERNS = ['node_modules', 'test', 'mock', 'Mock']
 
 
 class ReentrancyDetector:
@@ -27,7 +32,7 @@ class ReentrancyDetector:
             print(f"{vuln.severity}: {vuln.description}")
     """
 
-    def __init__(self, config: Optional[dict] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the detector.
 
@@ -36,11 +41,20 @@ class ReentrancyDetector:
                 - severity_threshold: Minimum severity to report (default: LOW)
                 - include_info: Include informational findings (default: False)
                 - max_file_size: Maximum file size to analyze in bytes (default: 1MB)
+
+        Raises:
+            ValueError: If configuration values are invalid
         """
         self.config = config or {}
-        self.severity_threshold = self.config.get('severity_threshold', Severity.LOW)
+        self.severity_threshold = self.config.get('severity_threshold', DEFAULT_SEVERITY_THRESHOLD)
         self.include_info = self.config.get('include_info', False)
-        self.max_file_size = self.config.get('max_file_size', 1024 * 1024)  # 1MB
+        self.max_file_size = self.config.get('max_file_size', DEFAULT_MAX_FILE_SIZE)
+
+        # Validate configuration
+        if not isinstance(self.severity_threshold, Severity):
+            raise ValueError(f"Invalid severity_threshold: {self.severity_threshold}")
+        if not isinstance(self.max_file_size, int) or self.max_file_size <= 0:
+            raise ValueError(f"Invalid max_file_size: {self.max_file_size}")
 
         self.parser = SolidityParser()
 
@@ -53,32 +67,92 @@ class ReentrancyDetector:
 
         Returns:
             AnalysisResult containing detected vulnerabilities
+
+        Raises:
+            ValueError: If file_path is invalid
         """
         file_path = Path(file_path)
         result = AnalysisResult(file_path=str(file_path))
-
         start_time = time.time()
 
-        # Validate file
+        # Validate file existence
         if not file_path.exists():
             result.parse_errors.append(f"File not found: {file_path}")
             return result
 
-        if not file_path.suffix == '.sol':
+        # Validate file extension
+        if file_path.suffix != '.sol':
             result.parse_errors.append(f"Not a Solidity file: {file_path}")
             return result
 
-        if file_path.stat().st_size > self.max_file_size:
-            result.parse_errors.append(f"File too large: {file_path}")
+        # Validate file size
+        try:
+            file_size = file_path.stat().st_size
+            if file_size > self.max_file_size:
+                result.parse_errors.append(
+                    f"File too large: {file_path} ({file_size / 1024 / 1024:.2f}MB > "
+                    f"{self.max_file_size / 1024 / 1024:.2f}MB)"
+                )
+                return result
+        except OSError as e:
+            result.parse_errors.append(f"Error accessing file: {e}")
             return result
 
-        # Read and parse file
+        # Read file content
         try:
             source_code = file_path.read_text(encoding='utf-8')
-        except Exception as e:
+        except UnicodeDecodeError as e:
+            result.parse_errors.append(f"File encoding error: {e}")
+            return result
+        except IOError as e:
             result.parse_errors.append(f"Error reading file: {e}")
             return result
 
+        # Analyze source code
+        return self._analyze_source_code(source_code, result, start_time)
+
+    def analyze_source(self, source_code: str, filename: str = "contract.sol") -> AnalysisResult:
+        """
+        Analyze Solidity source code directly.
+
+        Args:
+            source_code: Solidity source code string
+            filename: Optional filename for reporting
+
+        Returns:
+            AnalysisResult containing detected vulnerabilities
+
+        Raises:
+            ValueError: If source_code is empty or invalid
+        """
+        if not isinstance(source_code, str):
+            raise ValueError("source_code must be a string")
+        if not source_code.strip():
+            result = AnalysisResult(file_path=filename)
+            result.parse_errors.append("Empty source code provided")
+            return result
+
+        result = AnalysisResult(file_path=filename)
+        start_time = time.time()
+        return self._analyze_source_code(source_code, result, start_time)
+
+    def _analyze_source_code(
+        self,
+        source_code: str,
+        result: AnalysisResult,
+        start_time: float
+    ) -> AnalysisResult:
+        """
+        Internal method to analyze source code and populate result.
+
+        Args:
+            source_code: Solidity source code string
+            result: AnalysisResult to populate
+            start_time: Analysis start time for timing
+
+        Returns:
+            AnalysisResult with vulnerabilities populated
+        """
         # Parse contracts
         try:
             contracts = self.parser.parse(source_code)
@@ -105,43 +179,6 @@ class ReentrancyDetector:
         result.analysis_time_ms = (time.time() - start_time) * 1000
         return result
 
-    def analyze_source(self, source_code: str, filename: str = "contract.sol") -> AnalysisResult:
-        """
-        Analyze Solidity source code directly.
-
-        Args:
-            source_code: Solidity source code string
-            filename: Optional filename for reporting
-
-        Returns:
-            AnalysisResult containing detected vulnerabilities
-        """
-        result = AnalysisResult(file_path=filename)
-        start_time = time.time()
-
-        # Parse contracts
-        try:
-            contracts = self.parser.parse(source_code)
-            result.contracts = contracts
-        except Exception as e:
-            result.parse_errors.append(f"Parse error: {e}")
-            return result
-
-        # Run detection on each contract
-        for contract in contracts:
-            vulnerabilities = self._analyze_contract(contract)
-            result.vulnerabilities.extend(vulnerabilities)
-
-        # Filter and sort
-        result.vulnerabilities = [
-            v for v in result.vulnerabilities
-            if v.severity >= self.severity_threshold
-        ]
-        result.vulnerabilities.sort(key=lambda v: v.severity, reverse=True)
-
-        result.analysis_time_ms = (time.time() - start_time) * 1000
-        return result
-
     def scan_directory(
         self,
         directory: Union[str, Path],
@@ -158,21 +195,39 @@ class ReentrancyDetector:
 
         Returns:
             ScanResult with results from all files
+
+        Raises:
+            ValueError: If directory path is invalid
         """
         directory = Path(directory)
-        exclude_patterns = exclude_patterns or ['node_modules', 'test', 'mock', 'Mock']
+        exclude_patterns = exclude_patterns or DEFAULT_EXCLUDE_PATTERNS
+
+        if not directory.exists():
+            raise ValueError(f"Directory does not exist: {directory}")
+        if not directory.is_dir():
+            raise ValueError(f"Path is not a directory: {directory}")
 
         scan_result = ScanResult()
         start_time = time.time()
 
         # Find all .sol files
-        if recursive:
-            sol_files = list(directory.rglob('*.sol'))
-        else:
-            sol_files = list(directory.glob('*.sol'))
+        try:
+            if recursive:
+                sol_files = list(directory.rglob('*.sol'))
+            else:
+                sol_files = list(directory.glob('*.sol'))
+        except PermissionError as e:
+            scan_result.results.append(
+                AnalysisResult(
+                    file_path=str(directory),
+                    parse_errors=[f"Permission denied accessing directory: {e}"]
+                )
+            )
+            return scan_result
 
         # Filter excluded patterns
         def should_exclude(path: Path) -> bool:
+            """Check if a path should be excluded based on patterns."""
             path_str = str(path)
             return any(pattern in path_str for pattern in exclude_patterns)
 
@@ -180,10 +235,19 @@ class ReentrancyDetector:
 
         # Analyze each file
         for sol_file in sol_files:
-            result = self.analyze_file(sol_file)
-            scan_result.results.append(result)
-            scan_result.files_scanned += 1
-            scan_result.total_contracts += len(result.contracts)
+            try:
+                result = self.analyze_file(sol_file)
+                scan_result.results.append(result)
+                scan_result.files_scanned += 1
+                scan_result.total_contracts += len(result.contracts)
+            except Exception as e:
+                # Continue with other files even if one fails
+                error_result = AnalysisResult(
+                    file_path=str(sol_file),
+                    parse_errors=[f"Error analyzing file: {e}"]
+                )
+                scan_result.results.append(error_result)
+                scan_result.files_scanned += 1
 
         scan_result.total_analysis_time_ms = (time.time() - start_time) * 1000
         return scan_result
@@ -239,7 +303,7 @@ class ReentrancyDetector:
 
         return vulnerabilities
 
-    def get_stats(self, result: Union[AnalysisResult, ScanResult]) -> dict:
+    def get_stats(self, result: Union[AnalysisResult, ScanResult]) -> Dict[str, Any]:
         """
         Get statistics from analysis results.
 
@@ -247,7 +311,8 @@ class ReentrancyDetector:
             result: Analysis or scan result
 
         Returns:
-            Dictionary with statistics
+            Dictionary with statistics including file count, contract count,
+            vulnerability counts by severity, total vulnerabilities, and analysis time
         """
         if isinstance(result, AnalysisResult):
             return {
@@ -283,12 +348,19 @@ def analyze(source: str) -> List[Vulnerability]:
 
     Returns:
         List of vulnerabilities found
+
+    Raises:
+        ValueError: If source is invalid
     """
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("source must be a non-empty string")
+
     detector = ReentrancyDetector()
 
     # Check if it's a file path
-    if os.path.exists(source) and source.endswith('.sol'):
-        result = detector.analyze_file(source)
+    source_path = Path(source)
+    if source_path.exists() and source_path.suffix == '.sol':
+        result = detector.analyze_file(source_path)
     else:
         result = detector.analyze_source(source)
 

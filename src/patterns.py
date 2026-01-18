@@ -2,7 +2,7 @@
 Vulnerability patterns and detection rules for reentrancy attacks.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Callable
 from .models import (
     Contract, Function, Vulnerability, VulnerabilityType,
     Severity, SourceLocation, CodeSnippet, ExternalCall, StateChange
@@ -61,7 +61,7 @@ class ReentrancyPatterns:
         cls,
         function: Function,
         contract: Contract,
-        get_snippet: callable
+        get_snippet: Callable[[int, int], CodeSnippet]
     ) -> List[Vulnerability]:
         """
         Detect state changes that occur after external calls.
@@ -107,7 +107,7 @@ class ReentrancyPatterns:
         cls,
         function: Function,
         contract: Contract,
-        get_snippet: callable
+        get_snippet: Callable[[int, int], CodeSnippet]
     ) -> List[Vulnerability]:
         """
         Detect external calls made inside loops.
@@ -145,8 +145,8 @@ class ReentrancyPatterns:
         cls,
         function: Function,
         contract: Contract,
-        has_reentrancy_modifier: callable,
-        get_snippet: callable
+        has_reentrancy_modifier: Callable[[Function], bool],
+        get_snippet: Callable[[int, int], CodeSnippet]
     ) -> List[Vulnerability]:
         """
         Detect functions with external calls but no reentrancy protection.
@@ -197,7 +197,7 @@ class ReentrancyPatterns:
     def detect_cross_function_reentrancy(
         cls,
         contract: Contract,
-        get_snippet: callable
+        get_snippet: Callable[[int, int], CodeSnippet]
     ) -> List[Vulnerability]:
         """
         Detect potential cross-function reentrancy vulnerabilities.
@@ -257,7 +257,7 @@ class ReentrancyPatterns:
         cls,
         function: Function,
         contract: Contract,
-        get_snippet: callable
+        get_snippet: Callable[[int, int], CodeSnippet]
     ) -> List[Vulnerability]:
         """
         Detect delegatecall usage which can lead to reentrancy in the caller's context.

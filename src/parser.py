@@ -4,7 +4,7 @@ Uses regex-based parsing for simplicity and portability.
 """
 
 import re
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Callable
 from .models import (
     Contract, Function, ExternalCall, StateChange,
     SourceLocation, CodeSnippet
@@ -110,7 +110,21 @@ class SolidityParser:
         self.cleaned_code: str = ""
 
     def parse(self, source_code: str) -> List[Contract]:
-        """Parse Solidity source code and return list of contracts."""
+        """
+        Parse Solidity source code and return list of contracts.
+        
+        Args:
+            source_code: Solidity source code string
+            
+        Returns:
+            List of parsed Contract objects
+            
+        Raises:
+            ValueError: If source_code is invalid
+        """
+        if not isinstance(source_code, str):
+            raise ValueError("source_code must be a string")
+        
         self.source_code = source_code
         self.lines = source_code.split('\n')
 
@@ -414,13 +428,37 @@ class SolidityParser:
         return changes
 
     def _get_line_content(self, line_number: int) -> str:
-        """Get the content of a specific line."""
-        if 1 <= line_number <= len(self.lines):
-            return self.lines[line_number - 1].strip()
-        return ""
+        """
+        Get the content of a specific line.
+        
+        Args:
+            line_number: 1-based line number
+            
+        Returns:
+            Stripped line content, or empty string if line number is invalid
+        """
+        if not isinstance(line_number, int) or line_number < 1:
+            return ""
+        if line_number > len(self.lines):
+            return ""
+        return self.lines[line_number - 1].strip()
 
     def get_code_snippet(self, line: int, context: int = 3) -> CodeSnippet:
-        """Get a code snippet around a specific line."""
+        """
+        Get a code snippet around a specific line.
+        
+        Args:
+            line: Line number to center the snippet on
+            context: Number of lines before and after to include
+            
+        Returns:
+            CodeSnippet object with code and metadata
+        """
+        if not isinstance(line, int) or line < 1:
+            line = 1
+        if not isinstance(context, int) or context < 0:
+            context = 3
+            
         start = max(1, line - context)
         end = min(len(self.lines), line + context)
 
@@ -428,14 +466,25 @@ class SolidityParser:
         return CodeSnippet(
             code='\n'.join(snippet_lines),
             start_line=start,
-            highlight_lines=[line]
+            highlight_lines=[line] if 1 <= line <= len(self.lines) else []
         )
 
     def has_reentrancy_modifier(self, function: Function) -> bool:
-        """Check if a function has a reentrancy guard modifier."""
+        """
+        Check if a function has a reentrancy guard modifier.
+        
+        Args:
+            function: Function to check
+            
+        Returns:
+            True if function has a reentrancy guard modifier, False otherwise
+        """
+        if not isinstance(function, Function):
+            return False
+            
         guard_modifiers = ['nonreentrant', 'noreentrant', 'reentrancyguard', 'lock', 'mutex']
         for mod in function.modifiers:
-            if mod.lower() in guard_modifiers:
+            if isinstance(mod, str) and mod.lower() in guard_modifiers:
                 return True
         return False
     

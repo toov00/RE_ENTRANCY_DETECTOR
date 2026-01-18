@@ -39,7 +39,18 @@ except ImportError:
 
 
 def severity_from_string(s: str) -> Severity:
-    """Convert string to Severity enum."""
+    """
+    Convert string to Severity enum.
+    
+    Args:
+        s: Severity string (case-insensitive)
+        
+    Returns:
+        Severity enum value, defaults to LOW if invalid
+    """
+    if not isinstance(s, str):
+        return Severity.LOW
+        
     mapping = {
         'critical': Severity.CRITICAL,
         'high': Severity.HIGH,
