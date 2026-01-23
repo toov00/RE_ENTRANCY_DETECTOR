@@ -37,7 +37,7 @@ python -m src.cli scan contract.sol
 python -m src.cli scan ./contracts/
 ```
 
-### Output Formats
+### Command Options
 
 ```bash
 # JSON output
@@ -49,8 +49,6 @@ python -m src.cli scan contract.sol --format markdown -o report.md
 # Verbose mode (shows code snippets)
 python -m src.cli scan contract.sol --verbose
 ```
-
-### Command Options
 
 ```bash
 # Severity filtering
